@@ -1,8 +1,23 @@
 import struct
 from dataclasses import dataclass
+from enum import IntEnum
 
 HEADER_FORMAT = "!HHHHHH"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+QUESTION_FORMAT = "!HH"
+QUESTION_SIZE = struct.calcsize(QUESTION_FORMAT)
+MAX_LABEL = 63
+MAX_NAME = 255
+CLASS_IN = 1
+
+
+class RecordType(IntEnum):
+    A = 1
+    NS = 2
+    CNAME = 5
+    MX = 15
+    TXT = 16
+    AAAA = 28
 
 
 @dataclass
@@ -62,3 +77,57 @@ class Header:
             nscount=ns,
             arcount=ar,
         )
+
+
+def encode_name(name: str) -> bytes:
+    name = name.rstrip(".")
+    if not name:
+        return b"\x00"
+    out = bytearray()
+    for label in name.split("."):
+        raw = label.encode("ascii")
+        if not raw or len(raw) > MAX_LABEL:
+            raise ValueError(f"invalid label: {label!r}")
+        out.append(len(raw))
+        out += raw
+    out.append(0)
+    if len(out) > MAX_NAME:
+        raise ValueError("name too long")
+    return bytes(out)
+
+
+def decode_name(data: bytes, offset: int) -> tuple[str, int]:
+    labels = []
+    while True:
+        if offset >= len(data):
+            raise ValueError("truncated name")
+        length = data[offset]
+        offset += 1
+        if length == 0:
+            break
+        if length & 0xC0:
+            raise ValueError("compression pointers not supported yet")
+        end = offset + length
+        if end > len(data):
+            raise ValueError("truncated label")
+        labels.append(data[offset:end].decode("ascii"))
+        offset = end
+    return ".".join(labels), offset
+
+
+@dataclass
+class Question:
+    name: str
+    qtype: int = RecordType.A
+    qclass: int = CLASS_IN
+
+    def pack(self) -> bytes:
+        return encode_name(self.name) + struct.pack(QUESTION_FORMAT, self.qtype, self.qclass)
+
+    @classmethod
+    def unpack(cls, data: bytes, offset: int) -> tuple["Question", int]:
+        name, offset = decode_name(data, offset)
+        if offset + QUESTION_SIZE > len(data):
+            raise ValueError("question too short")
+        qtype, qclass = struct.unpack_from(QUESTION_FORMAT, data, offset)
+        return cls(name, qtype, qclass), offset + QUESTION_SIZE
