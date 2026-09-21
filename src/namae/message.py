@@ -98,21 +98,38 @@ def encode_name(name: str) -> bytes:
 
 def decode_name(data: bytes, offset: int) -> tuple[str, int]:
     labels = []
+    end = None
+    seen = set()
+    total = 1
     while True:
         if offset >= len(data):
             raise ValueError("truncated name")
         length = data[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 2 > len(data):
+                raise ValueError("truncated pointer")
+            target = ((length & 0x3F) << 8) | data[offset + 1]
+            if end is None:
+                end = offset + 2
+            if target in seen:
+                raise ValueError("compression loop")
+            seen.add(target)
+            offset = target
+            continue
+        if length & 0xC0:
+            raise ValueError("invalid label type")
         offset += 1
         if length == 0:
             break
-        if length & 0xC0:
-            raise ValueError("compression pointers not supported yet")
-        end = offset + length
-        if end > len(data):
+        total += length + 1
+        if total > MAX_NAME:
+            raise ValueError("name too long")
+        label_end = offset + length
+        if label_end > len(data):
             raise ValueError("truncated label")
-        labels.append(data[offset:end].decode("ascii"))
-        offset = end
-    return ".".join(labels), offset
+        labels.append(data[offset:label_end].decode("ascii"))
+        offset = label_end
+    return ".".join(labels), end if end is not None else offset
 
 
 @dataclass

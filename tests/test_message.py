@@ -69,9 +69,60 @@ def test_decode_name_truncated():
         decode_name(b"\x03ww", 0)
 
 
-def test_decode_name_pointer_unsupported():
+def test_decode_name_pointer_only():
+    data = b"\x07example\x03com\x00\xc0\x00"
+    assert decode_name(data, 13) == ("example.com", 15)
+
+
+def test_decode_name_labels_then_pointer():
+    data = b"\x07example\x03com\x00\x03www\xc0\x00"
+    assert decode_name(data, 13) == ("www.example.com", len(data))
+
+
+def test_decode_name_self_loop():
     with pytest.raises(ValueError):
-        decode_name(b"\xc0\x0c", 0)
+        decode_name(b"\xc0\x00", 0)
+
+
+def test_decode_name_mutual_loop():
+    with pytest.raises(ValueError):
+        decode_name(b"\xc0\x02\xc0\x00", 0)
+
+
+def test_decode_name_pointer_out_of_range():
+    with pytest.raises(ValueError):
+        decode_name(b"\xc0\x10", 0)
+
+
+def test_decode_name_truncated_pointer():
+    with pytest.raises(ValueError):
+        decode_name(b"\xc0", 0)
+
+
+def test_decode_name_reserved_label_type():
+    with pytest.raises(ValueError):
+        decode_name(b"\x80\x00", 0)
+
+
+def test_decode_name_max_length():
+    data = (b"\x3f" + b"a" * 63) * 3 + b"\x3d" + b"a" * 61 + b"\x00"
+    assert len(data) == 255
+    name, end = decode_name(data, 0)
+    assert end == 255
+    assert len(name) == 253
+
+
+def test_decode_name_too_long():
+    data = (b"\x3f" + b"a" * 63) * 4 + b"\x01a\x00"
+    with pytest.raises(ValueError):
+        decode_name(data, 0)
+
+
+def test_decode_name_too_long_via_pointers():
+    label = b"\x3f" + b"a" * 63
+    data = label * 2 + b"\x00" + label * 2 + b"\xc0\x00"
+    with pytest.raises(ValueError):
+        decode_name(data, 129)
 
 
 def test_question_pack():
