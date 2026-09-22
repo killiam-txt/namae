@@ -4,6 +4,7 @@ from namae.message import (
     HEADER_SIZE,
     Header,
     Question,
+    Record,
     RecordType,
     decode_name,
     encode_name,
@@ -140,3 +141,74 @@ def test_question_roundtrip_after_header():
 def test_question_too_short():
     with pytest.raises(ValueError):
         Question.unpack(b"\x03com\x00\x00", 0)
+
+
+def test_record_pack_a():
+    record = Record("example.com", RecordType.A, 300, "93.184.216.34")
+    expected = b"\x07example\x03com\x00" + bytes.fromhex("0001 0001 0000012c 0004 5db8d822")
+    assert record.pack() == expected
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        Record("example.com", RecordType.A, 300, "93.184.216.34"),
+        Record("example.com", RecordType.AAAA, 60, "2001:db8::1"),
+        Record("www.example.com", RecordType.CNAME, 60, "example.com"),
+        Record("example.com", RecordType.NS, 3600, "ns1.example.com"),
+        Record("example.com", RecordType.MX, 300, (10, "mail.example.com")),
+        Record("example.com", RecordType.TXT, 120, [b"v=spf1 -all", b"hello"]),
+        Record("example.com", 99, 5, b"\x01\x02\x03"),
+    ],
+)
+
+
+def test_record_roundtrip(record):
+    data = record.pack()
+    parsed, end = Record.unpack(data, 0)
+    assert parsed == record
+    assert end == len(data)
+
+
+def test_record_unpack_compressed_answer():
+    question = Question("example.com").pack()
+    answer = bytes.fromhex("c00c 0001 0001 0000012c 0004 5db8d822")
+    data = Header(id=1, qr=True, qdcount=1, ancount=1).pack() + question + answer
+    record, end = Record.unpack(data, HEADER_SIZE + len(question))
+    assert record == Record("example.com", RecordType.A, 300, "93.184.216.34")
+    assert end == len(data)
+
+
+def test_record_unpack_cname_rdata_pointer():
+    data = (
+        b"\x07example\x03com\x00"
+        + b"\x03www\xc0\x00"
+        + bytes.fromhex("0005 0001 0000003c 0002 c000")
+    )
+    record, end = Record.unpack(data, 13)
+    assert record == Record("www.example.com", RecordType.CNAME, 60, "example.com")
+    assert end == len(data)
+
+
+def test_record_too_short():
+    data = Record("example.com", RecordType.A, 300, "1.2.3.4").pack()
+    with pytest.raises(ValueError):
+        Record.unpack(data[:-1], 0)
+
+
+def test_record_invalid_a_length():
+    data = b"\x00" + bytes.fromhex("0001 0001 00000000 0003 010203")
+    with pytest.raises(ValueError):
+        Record.unpack(data, 0)
+
+
+def test_record_name_exceeds_rdata():
+    data = b"\x00" + bytes.fromhex("0005 0001 00000000 0001") + b"\x01a\x00"
+    with pytest.raises(ValueError):
+        Record.unpack(data, 0)
+
+
+def test_record_txt_truncated_string():
+    data = b"\x00" + bytes.fromhex("0010 0001 00000000 0003") + b"\x05ab"
+    with pytest.raises(ValueError):
+        Record.unpack(data, 0)

@@ -1,3 +1,4 @@
+import ipaddress
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
@@ -6,9 +7,13 @@ HEADER_FORMAT = "!HHHHHH"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 QUESTION_FORMAT = "!HH"
 QUESTION_SIZE = struct.calcsize(QUESTION_FORMAT)
+RECORD_FORMAT = "!HHIH"
+RECORD_SIZE = struct.calcsize(RECORD_FORMAT)
 MAX_LABEL = 63
 MAX_NAME = 255
 CLASS_IN = 1
+
+RData = str | tuple[int, str] | list[bytes] | bytes
 
 
 class RecordType(IntEnum):
@@ -148,3 +153,89 @@ class Question:
             raise ValueError("question too short")
         qtype, qclass = struct.unpack_from(QUESTION_FORMAT, data, offset)
         return cls(name, qtype, qclass), offset + QUESTION_SIZE
+
+
+def decode_rdata(rtype: int, data: bytes, offset: int, end: int) -> RData:
+    if rtype == RecordType.A:
+        if end - offset != 4:
+            raise ValueError("invalid A rdata")
+        return str(ipaddress.IPv4Address(data[offset:end]))
+    if rtype == RecordType.AAAA:
+        if end - offset != 16:
+            raise ValueError("invalid AAAA rdata")
+        return str(ipaddress.IPv6Address(data[offset:end]))
+    if rtype in (RecordType.CNAME, RecordType.NS):
+        name, after = decode_name(data, offset)
+        if after > end:
+            raise ValueError("name exceeds rdata")
+        return name
+    if rtype == RecordType.MX:
+        if end - offset < 3:
+            raise ValueError("invalid MX rdata")
+        (preference,) = struct.unpack_from("!H", data, offset)
+        name, after = decode_name(data, offset + 2)
+        if after > end:
+            raise ValueError("name exceeds rdata")
+        return preference, name
+    if rtype == RecordType.TXT:
+        strings = []
+        while offset < end:
+            length = data[offset]
+            offset += 1
+            if offset + length > end:
+                raise ValueError("truncated txt string")
+            strings.append(data[offset : offset + length])
+            offset += length
+        return strings
+    return data[offset:end]
+
+
+def encode_rdata(rtype: int, rdata: RData) -> bytes:
+    if rtype == RecordType.A:
+        return ipaddress.IPv4Address(rdata).packed
+    if rtype == RecordType.AAAA:
+        return ipaddress.IPv6Address(rdata).packed
+    if rtype in (RecordType.CNAME, RecordType.NS):
+        return encode_name(rdata)
+    if rtype == RecordType.MX:
+        preference, name = rdata
+        return struct.pack("!H", preference) + encode_name(name)
+    if rtype == RecordType.TXT:
+        out = bytearray()
+        for chunk in rdata:
+            if len(chunk) > 255:
+                raise ValueError("txt string too long")
+            out.append(len(chunk))
+            out += chunk
+        return bytes(out)
+    return bytes(rdata)
+
+
+@dataclass
+class Record:
+    name: str
+    rtype: int
+    ttl: int
+    rdata: RData
+    rclass: int = CLASS_IN
+
+    def pack(self) -> bytes:
+        payload = encode_rdata(self.rtype, self.rdata)
+        return (
+            encode_name(self.name)
+            + struct.pack(RECORD_FORMAT, self.rtype, self.rclass, self.ttl, len(payload))
+            + payload
+        )
+
+    @classmethod
+    def unpack(cls, data: bytes, offset: int) -> tuple["Record", int]:
+        name, offset = decode_name(data, offset)
+        if offset + RECORD_SIZE > len(data):
+            raise ValueError("record too short")
+        rtype, rclass, ttl, rdlength = struct.unpack_from(RECORD_FORMAT, data, offset)
+        offset += RECORD_SIZE
+        end = offset + rdlength
+        if end > len(data):
+            raise ValueError("rdata too short")
+        rdata = decode_rdata(rtype, data, offset, end)
+        return cls(name, rtype, ttl, rdata, rclass), end
