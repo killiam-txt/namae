@@ -5,6 +5,7 @@ from namae.message import (
     Header,
     Question,
     Record,
+    Message,
     RecordType,
     decode_name,
     encode_name,
@@ -212,3 +213,59 @@ def test_record_txt_truncated_string():
     data = b"\x00" + bytes.fromhex("0010 0001 00000000 0003") + b"\x05ab"
     with pytest.raises(ValueError):
         Record.unpack(data, 0)
+
+
+def test_message_pack_fixes_counts():
+    header = Header(id=1, qdcount=99, ancount=99)
+    message = Message(header, [Question("example.com")], [], [], [])
+    parsed = Message.unpack(message.pack())
+    assert parsed.header.qdcount == 1
+    assert parsed.header.ancount == 0
+
+
+def test_message_roundtrip_query():
+    message = Message(Header(id=42, qdcount=1), [Question("example.com")], [], [], [])
+    parsed = Message.unpack(message.pack())
+    assert parsed.header.id == 42
+    assert parsed.questions == [Question("example.com")]
+    assert parsed.answers == []
+
+
+def test_message_roundtrip_response():
+    question = Question("example.com")
+    answer = Record("example.com", RecordType.A, 300, "93.184.216.34")
+    header = Header(id=42, qr=True, ra=True, qdcount=1, ancount=1)
+    message = Message(header, [question], [answer], [], [])
+    parsed = Message.unpack(message.pack())
+    assert parsed.header.qr is True
+    assert parsed.questions == [question]
+    assert parsed.answers == [answer]
+
+
+def test_message_multiple_questions_and_answers():
+    questions = [Question("example.com"), Question("example.org")]
+    answers = [
+        Record("example.com", RecordType.A, 300, "93.184.216.34"),
+        Record("example.org", RecordType.A, 60, "1.2.3.4"),
+    ]
+    header = Header(id=1, qr=True, qdcount=2, ancount=2)
+    message = Message(header, questions, answers, [], [])
+    parsed = Message.unpack(message.pack())
+    assert parsed.questions == questions
+    assert parsed.answers == answers
+
+
+def test_message_with_authority_and_additional():
+    header = Header(id=1, qr=True, qdcount=0, nscount=1, arcount=1)
+    authority = Record("example.com", RecordType.NS, 3600, "ns1.example.com")
+    additional = Record("ns1.example.com", RecordType.A, 3600, "192.0.2.1")
+    message = Message(header, [], [], [authority], [additional])
+    parsed = Message.unpack(message.pack())
+    assert parsed.authorities == [authority]
+    assert parsed.additionals == [additional]
+
+
+def test_message_truncated():
+    data = Header(id=1, qdcount=1).pack()
+    with pytest.raises(ValueError):
+        Message.unpack(data)

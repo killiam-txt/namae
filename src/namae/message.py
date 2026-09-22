@@ -239,3 +239,56 @@ class Record:
             raise ValueError("rdata too short")
         rdata = decode_rdata(rtype, data, offset, end)
         return cls(name, rtype, ttl, rdata, rclass), end
+
+
+@dataclass
+class Message:
+    header: Header
+    questions: list[Question]
+    answers: list[Record]
+    authorities: list[Record]
+    additionals: list[Record]
+
+    def pack(self) -> bytes:
+        header = Header(
+            id=self.header.id,
+            qr=self.header.qr,
+            opcode=self.header.opcode,
+            aa=self.header.aa,
+            tc=self.header.tc,
+            rd=self.header.rd,
+            ra=self.header.ra,
+            z=self.header.z,
+            rcode=self.header.rcode,
+            qdcount=len(self.questions),
+            ancount=len(self.answers),
+            nscount=len(self.authorities),
+            arcount=len(self.additionals),
+        )
+        out = bytearray(header.pack())
+        for question in self.questions:
+            out += question.pack()
+        for record in self.answers + self.authorities + self.additionals:
+            out += record.pack()
+        return bytes(out)
+
+    @classmethod
+    def unpack(cls, data: bytes) -> "Message":
+        header = Header.unpack(data)
+        offset = HEADER_SIZE
+        questions = []
+        for _ in range(header.qdcount):
+            question, offset = Question.unpack(data, offset)
+            questions.append(question)
+        answers, offset = _unpack_records(data, offset, header.ancount)
+        authorities, offset = _unpack_records(data, offset, header.nscount)
+        additionals, offset = _unpack_records(data, offset, header.arcount)
+        return cls(header, questions, answers, authorities, additionals)
+
+
+def _unpack_records(data: bytes, offset: int, count: int) -> tuple[list[Record], int]:
+    records = []
+    for _ in range(count):
+        record, offset = Record.unpack(data, offset)
+        records.append(record)
+    return records, offset
