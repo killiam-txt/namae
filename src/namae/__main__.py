@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="namae", description="DNS resolver")
     parser.add_argument("name", help="domain name to resolve")
     parser.add_argument(
-        "-t", "--type", default="A", choices=sorted(TYPE_NAMES), help="record type"
+        "-t", "--type", default="A", type=str.upper, choices=sorted(TYPE_NAMES), help="record type"
     )
     parser.add_argument("-s", "--server", default="8.8.8.8", help="dns server")
     parser.add_argument("-p", "--port", type=int, default=53, help="dns server port")
