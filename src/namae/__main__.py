@@ -3,6 +3,7 @@ import sys
 
 from namae.client import DnsError, resolve
 from namae.message import RecordType
+from namae.resolver import ResolutionError, resolve_recursive
 
 TYPE_NAMES = {
     "A": RecordType.A,
@@ -32,12 +33,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-s", "--server", default="8.8.8.8", help="dns server")
     parser.add_argument("-p", "--port", type=int, default=53, help="dns server port")
     parser.add_argument("--timeout", type=float, default=5.0, help="query timeout in seconds")
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="resolve recursively from root servers instead of using --server",
+    )
     args = parser.parse_args(argv)
 
     qtype = TYPE_NAMES[args.type]
     try:
-        response = resolve(args.name, qtype, args.server, args.port, args.timeout)
-    except DnsError as exc:
+        if args.recursive:
+            response = resolve_recursive(args.name, qtype, args.timeout)
+        else:
+            response = resolve(args.name, qtype, args.server, args.port, args.timeout)
+    except (DnsError, ResolutionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
